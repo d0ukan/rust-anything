@@ -15,7 +15,7 @@ use crate::ts::exports::Param;
 fn signature(f: &PortFn, source: &[Param]) -> String {
     let mut parts = Vec::new();
     let mut keyword_only = false;
-    for (name, _) in &f.params {
+    for (name, ty) in &f.params {
         let param = source
             .iter()
             .find(|p| crate::bridge::snake_case(&p.name) == *name);
@@ -26,7 +26,16 @@ fn signature(f: &PortFn, source: &[Param]) -> String {
         let py_name = name.trim_start_matches("r#");
         match param {
             Some(p) if p.optional => match p.default.as_deref().and_then(rust_literal) {
-                Some(literal) => parts.push(format!("{py_name}={literal}")),
+                Some(literal) => {
+                    let literal = if ty == "f64"
+                        && let Ok(integer) = literal.parse::<i64>()
+                    {
+                        format!("{integer}_f64")
+                    } else {
+                        literal
+                    };
+                    parts.push(format!("{py_name}={literal}"));
+                }
                 None => parts.push(format!("{py_name}=None")),
             },
             _ => parts.push(py_name.to_string()),
@@ -1122,6 +1131,29 @@ mod tests {
         assert_eq!(rust_literal("None"), None);
         assert_eq!(rust_literal("[]"), None);
         assert_eq!(rust_literal("'a\\nb'"), None);
+    }
+
+    #[test]
+    fn integer_defaults_match_the_rust_parameter_type() {
+        let f = PortFn {
+            js_name: "scale".into(),
+            rust_name: "scale".into(),
+            params: vec![
+                ("factor".into(), "f64".into()),
+                ("count".into(), "i64".into()),
+            ],
+            ret: "f64".into(),
+            fallible: true,
+            is_async: false,
+        };
+        let param = |name: &str, default: &str| Param {
+            name: name.into(),
+            optional: true,
+            default: Some(default.into()),
+            ..Default::default()
+        };
+        let source = [param("factor", "-1_000"), param("count", "2")];
+        assert_eq!(signature(&f, &source), "factor=-1000_f64, count=2");
     }
 
     #[test]
